@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'app'))
-from domain import normalize_target, decision, snapshot, parse_json, dump
+from domain import normalize_target, decision, snapshot, parse_json, dump, like_pattern
 from datetime import datetime
 class DomainTests(unittest.TestCase):
     def test_normalization(self):
@@ -21,4 +21,7 @@ class DomainTests(unittest.TestCase):
         obj={'created_at':datetime(2026,11,25,12,0),'version_no':1}
         self.assertEqual(snapshot(obj),parse_json(dump(obj)))
         self.assertIsNone(snapshot(None))
+    def test_like_pattern(self):
+        self.assertEqual(like_pattern('  Docs.Example  ', str.lower), '%docs.example%')
+        self.assertEqual(like_pattern('req-100%_a\\b', str.upper), r'%REQ-100\%\_A\\B%')
 if __name__=='__main__':unittest.main()

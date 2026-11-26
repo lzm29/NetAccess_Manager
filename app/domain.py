@@ -44,3 +44,12 @@ def decision(rows):
     if any(x['list_type'] == 'WHITELIST' for x in rows):
         return 'ALLOW', 'Khớp Whitelist, không khớp Blacklist.'
     return 'BLOCK', 'Không khớp Whitelist; chặn mặc định.'
+
+
+def like_pattern(term, transform=None):
+    """Build a safe SQL LIKE substring pattern after trimming surrounding whitespace."""
+    cleaned = term.strip()
+    if transform is not None:
+        cleaned = transform(cleaned)
+    escaped = cleaned.replace('\\', '\\\\').replace('%', r'\%').replace('_', r'\_')
+    return f'%{escaped}%'
