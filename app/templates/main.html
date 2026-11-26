@@ -1,14 +1,102 @@
 <!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title }} | NetAccess Manager</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}"></head>
 <body>
+{% from 'status.html' import state %}
 {% macro csrf() %}<input type="hidden" name="csrf" value="{{ session.get('csrf','') }}">{% endmacro %}
-{% macro state(s) %}<span class="state {{ s|lower }}">{{ {'PENDING':'Chờ duyệt','APPROVED':'Đã duyệt','REJECTED':'Từ chối','APPLYING':'Đang áp dụng','APPLIED':'Đã áp dụng','APPLY_FAILED':'Áp dụng thất bại','INVALIDATED':'Không còn hợp lệ','ACTIVE':'Hiệu lực','INACTIVE':'Ngừng hiệu lực','LOCKED':'Đã khóa','SUCCESS':'Thành công','FAILED':'Thất bại','RUNNING':'Đang thực hiện','UNVERIFIED':'Chưa xác minh'}.get(s,s) }}</span>{% endmacro %}
+{% macro password_field(id, name, label, autocomplete, minlength=none, maxlength=none, hint=none, error=none, toggle_label=none) %}
+{% set toggle_label = toggle_label or label|lower %}
+<div class="password-field">
+  <label for="{{ id }}">{{ label }}</label>
+  <div class="password-control">
+    <input id="{{ id }}" type="password" name="{{ name }}" required autocomplete="{{ autocomplete }}" spellcheck="false" autocapitalize="none"
+           {% if minlength is not none %}minlength="{{ minlength }}"{% endif %}
+           {% if maxlength is not none %}maxlength="{{ maxlength }}"{% endif %}
+           {% if error %}aria-invalid="true"{% endif %}
+           {% if hint or error %}aria-describedby="{{ [id ~ '-hint' if hint else '', id ~ '-error' if error else '']|reject('equalto', '')|join(' ') }}"{% endif %}>
+    <button class="password-toggle" type="button" aria-controls="{{ id }}" aria-label="Hiện {{ toggle_label }}" data-password-label="{{ toggle_label }}" hidden>
+      <span class="password-eye" aria-hidden="true"></span>
+    </button>
+  </div>
+  {% if hint %}<small class="password-hint" id="{{ id }}-hint">{{ hint }}</small>{% endif %}
+  {% if error %}<small class="password-error" id="{{ id }}-error">{{ error }}</small>{% endif %}
+</div>
+{% endmacro %}
 {% macro reqtable(items) %}<div class="tablewrap"><table><thead><tr><th>Mã đề xuất</th><th>Đối tượng</th><th>Danh sách</th><th>Hành động</th><th>Trạng thái</th><th>Người gửi</th></tr></thead><tbody>{% for x in items %}<tr><td><a href="{{ url_for('request_detail',rid=x.request_id) }}">{{ x.request_code }}</a></td><td><b>{{ x.target_value }}</b><small>{{ x.target_type }}</small></td><td>{{ x.list_type }}</td><td>{{ x.change_action }}</td><td>{{ state(x.request_status) }}</td><td>{{ x.requester_name }}</td></tr>{% else %}<tr><td colspan="6" class="empty">Chưa có đề xuất phù hợp.</td></tr>{% endfor %}</tbody></table></div>{% endmacro %}
-{% macro roles(selected=0) %}{% for i,n in [(1,'Requester – IT'),(2,'Approver – ATTT'),(3,'Admin – Quản trị mạng')] %}<option value="{{ i }}" {% if i==selected %}selected{% endif %}>{{ n }}</option>{% endfor %}{% endmacro %}
-{% if g.user %}<div class="shell"><aside><div class="brand"><span class="mark">N</span><div>NetAccess<small>MANAGER · NHÓM 13</small></div></div><div class="navlabel">KHÔNG GIAN LÀM VIỆC</div><nav><a href="{{ url_for('home') }}" class="{{ 'on' if view=='home' }}">Tổng quan</a><a href="{{ url_for('entries') }}" class="{{ 'on' if view=='entries' }}">Whitelist / Blacklist</a><a href="{{ url_for('requests_list') }}" class="{{ 'on' if view in ['requests','detail'] }}">Đề xuất & lịch sử</a>{% if g.user.role_code=='REQUESTER' %}<a href="{{ url_for('new_request') }}">+ Tạo đề xuất</a>{% elif g.user.role_code=='APPROVER' %}<a href="{{ url_for('requests_list',status='PENDING') }}">Hàng đợi phê duyệt</a>{% else %}<a href="{{ url_for('requests_list',status='APPROVED') }}">Hàng đợi áp dụng</a><a href="{{ url_for('requests_list',status='APPLY_FAILED') }}">Áp dụng thất bại</a><a href="{{ url_for('policy') }}">Kiểm chứng chính sách</a><div class="navlabel">QUẢN TRỊ</div><a href="{{ url_for('users') }}">Tài khoản & phân quyền</a><a href="{{ url_for('audit_view') }}">Nhật ký kiểm toán</a>{% endif %}</nav><div class="asidefoot">MÔI TRƯỜNG LAB<br><small>Không tác động mạng thật</small></div></aside><main><header><div><span class="eyebrow">NETWORK ACCESS MANAGEMENT</span><h1>{{ title }}</h1></div><div class="identity"><div><b>{{ g.user.full_name }}</b><small>{{ g.user.role_code }}</small></div><form method="post" action="{{ url_for('logout') }}">{{ csrf() }}<button class="secondary">Đăng xuất</button></form></div></header><div class="notice">Chế độ SIMULATED — chỉ quản lý và kiểm chứng dữ liệu Lab, không chặn lưu lượng mạng thật.</div>
+{% if g.user %}<div class="shell"><aside><div class="brand"><span class="mark">N</span><div>NetAccess<small>MANAGER · NHÓM 13</small></div></div><div class="navlabel">KHÔNG GIAN LÀM VIỆC</div><nav><a href="{{ url_for('home') }}" class="{{ 'on' if view=='home' }}">Tổng quan</a><a href="{{ url_for('entries') }}" class="{{ 'on' if view=='entries' }}">Whitelist / Blacklist</a><a href="{{ url_for('requests_list') }}" class="{{ 'on' if view in ['requests','detail'] }}">Đề xuất & lịch sử</a>{% if g.user.role_code=='REQUESTER' %}<a href="{{ url_for('new_request') }}">+ Tạo đề xuất</a>{% elif g.user.role_code=='APPROVER' %}<a href="{{ url_for('requests_list',status='PENDING') }}">Hàng đợi phê duyệt</a>{% else %}<a href="{{ url_for('requests_list',status='APPROVED') }}">Hàng đợi áp dụng</a><a href="{{ url_for('requests_list',status='APPLY_FAILED') }}">Áp dụng thất bại</a><a href="{{ url_for('policy') }}">Kiểm chứng chính sách</a><div class="navlabel">QUẢN TRỊ</div><a href="{{ url_for('users') }}">Tài khoản & phân quyền</a><a href="{{ url_for('audit_view') }}">Nhật ký kiểm toán</a>{% endif %}</nav><div class="asidefoot">MÔI TRƯỜNG LAB<br><small>Không tác động mạng thật</small></div></aside>
+<main>
+  <header>
+    <div><span class="eyebrow">NETWORK ACCESS MANAGEMENT</span><h1>{{ title }}</h1></div>
+    <details class="account-menu" id="account-menu">
+      <summary class="account-trigger" aria-label="Tài khoản của {{ g.user.full_name }}">
+        <span class="account-avatar" aria-hidden="true">{{ g.user.full_name.strip()[:1]|upper }}</span>
+        <span class="account-trigger-name">
+          <strong>{{ g.user.full_name }}</strong>
+          <small>{{ g.user.role_code }}</small>
+        </span>
+        <span class="account-chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="account-dropdown">
+        <div class="account-dropdown-profile">
+          <strong>{{ g.user.full_name }}</strong>
+          <small>@{{ g.user.username }} · {{ g.user.role_code }}</small>
+        </div>
+        <a class="account-menu-item" href="{{ url_for('account') }}" {% if view=='account' %}aria-current="page"{% endif %}>Thông tin tài khoản</a>
+        <a class="account-menu-item" href="{{ url_for('change_password') }}" {% if view=='change_password' %}aria-current="page"{% endif %}>Đổi mật khẩu</a>
+        <form class="account-menu-signout" method="post" action="{{ url_for('logout') }}">
+          {{ csrf() }}
+          <button type="submit" class="account-menu-item">Đăng xuất</button>
+        </form>
+      </div>
+    </details>
+  </header>
+  <div class="notice">Chế độ SIMULATED — chỉ quản lý và kiểm chứng dữ liệu Lab, không chặn lưu lượng mạng thật.</div>
 {% else %}<main class="guest"><div class="brand guestbrand"><span class="mark">N</span><div>NetAccess<small>MANAGER · NHÓM 13</small></div></div>{% endif %}
 {% for category,msg in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ msg }}</div>{% endfor %}
-{% if view=='login' %}<section class="panel login"><div class="eyebrow">HỆ THỐNG QUẢN LÝ TRUY CẬP MẠNG</div><h1>Đăng nhập</h1><p>Quản lý thay đổi IP và tên miền theo quy trình phê duyệt.</p><form method="post">{{ csrf() }}<label>Tên đăng nhập<input name="username" required maxlength="64" autocomplete="username"></label><label>Mật khẩu<input type="password" name="password" required autocomplete="current-password"></label><button class="wide">Đăng nhập</button></form><small>Chỉ sử dụng tài khoản đã được cấp. Môi trường Lab.</small></section>
+{% if view=='login' %}
+<section class="panel login">
+  <div class="eyebrow">HỆ THỐNG QUẢN LÝ TRUY CẬP MẠNG</div>
+  <h1>Đăng nhập</h1>
+  <p>Quản lý thay đổi IP và tên miền theo quy trình phê duyệt.</p>
+  <form method="post">
+    {{ csrf() }}
+    <label>Tên đăng nhập<input name="username" required maxlength="64" autocomplete="username"></label>
+    {{ password_field('login-password', 'password', 'Mật khẩu', 'current-password') }}
+    <button class="wide">Đăng nhập</button>
+  </form>
+  <small>Chỉ sử dụng tài khoản đã được cấp. Môi trường Lab.</small>
+</section>
+{% elif view=='account' %}
+<section class="panel narrow account-panel">
+  <dl class="details">
+    <dt>Họ và tên</dt><dd>{{ g.user.full_name }}</dd>
+    <dt>Tên đăng nhập</dt><dd>{{ g.user.username }}</dd>
+    <dt>Vai trò</dt><dd>{{ g.user.role_code }}</dd>
+    <dt>Trạng thái</dt><dd>{{ state(g.user.account_status) }}</dd>
+  </dl>
+  <div class="actions">
+    <a class="button" href="{{ url_for('change_password') }}">Đổi mật khẩu</a>
+    <a href="{{ url_for('home') }}">Về tổng quan</a>
+  </div>
+</section>
+{% elif view=='change_password' %}
+<section class="panel narrow account-panel">
+  <form method="post" class="change-password-form" data-password-confirmation="new_password">
+    {{ csrf() }}
+    <input type="hidden" name="username" value="{{ g.user.username }}" autocomplete="username">
+    {{ password_field('current-password', 'current_password', 'Mật khẩu hiện tại', 'current-password',
+                      maxlength=current_max_length, error=errors.get('current_password')) }}
+    {{ password_field('new-password', 'new_password', 'Mật khẩu mới', 'new-password',
+                      minlength=min_length, maxlength=max_length, hint='Dùng ' ~ min_length ~ '–' ~ max_length ~ ' ký tự.',
+                      error=errors.get('new_password')) }}
+    {{ password_field('confirm-password', 'confirm_password', 'Nhập lại mật khẩu mới', 'new-password',
+                      minlength=min_length, maxlength=max_length, error=errors.get('confirm_password'),
+                      toggle_label='mật khẩu nhập lại') }}
+    <div class="actions">
+      <button type="submit">Lưu mật khẩu mới</button>
+      <a href="{{ url_for('account') }}">Hủy</a>
+    </div>
+  </form>
+</section>
 {% elif view=='home' %}<div class="metrics"><section><span>Whitelist hiệu lực</span><strong>{{ (lists|selectattr('list_type','equalto','WHITELIST')|map(attribute='n')|first)|default(0) }}</strong></section><section><span>Blacklist hiệu lực</span><strong>{{ (lists|selectattr('list_type','equalto','BLACKLIST')|map(attribute='n')|first)|default(0) }}</strong></section><section><span>Đề xuất chờ duyệt</span><strong>{{ (counts|selectattr('request_status','equalto','PENDING')|map(attribute='n')|first)|default(0) }}</strong></section><section><span>Đã áp dụng</span><strong>{{ (counts|selectattr('request_status','equalto','APPLIED')|map(attribute='n')|first)|default(0) }}</strong></section></div><section class="panel"><h2>Đề xuất gần đây</h2>{{ reqtable(recent) }}</section>
 {% elif view=='entries' %}<section class="panel"><form class="filters" method="get"><label>Tìm IP / tên miền<input name="q" value="{{ q }}"></label><label>Danh sách<select name="list_type"><option value="">Tất cả</option>{% for v in ['WHITELIST','BLACKLIST'] %}<option {% if lt==v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label><label>Trạng thái<select name="status">{% for v,n in [('ACTIVE','Hiệu lực'),('INACTIVE','Ngừng hiệu lực'),('ALL','Tất cả')] %}<option value="{{ v }}" {% if status==v %}selected{% endif %}>{{ n }}</option>{% endfor %}</select></label><button>Lọc</button></form><div class="tablewrap"><table><thead><tr><th>IP / tên miền</th><th>Danh sách</th><th>Mô tả</th><th>Phiên bản</th><th>Trạng thái</th></tr></thead><tbody>{% for x in items %}<tr><td><b>{{ x.target_value }}</b><small>{{ x.target_type }}</small></td><td>{{ x.list_type }}</td><td>{{ x.description }}</td><td>{{ x.version_no }}</td><td>{{ state(x.entry_status) }}</td></tr>{% else %}<tr><td colspan="5" class="empty">Chưa có quy tắc.</td></tr>{% endfor %}</tbody></table></div></section>
 {% elif view=='requests' %}<section class="panel"><form class="filters" method="get"><label>Tìm mã hoặc IP / tên miền<input name="q" value="{{ q }}"></label><label>Trạng thái<select name="status"><option value="">Tất cả</option>{% for v in ['PENDING','APPROVED','REJECTED','APPLYING','APPLIED','APPLY_FAILED','INVALIDATED'] %}<option value="{{ v }}" {% if status==v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label><button>Lọc</button>{% if g.user.role_code=='REQUESTER' %}<a class="button" href="{{ url_for('new_request') }}">+ Tạo đề xuất</a>{% endif %}</form>{{ reqtable(items) }}</section>
@@ -61,13 +149,16 @@
       </div>
       <div class="proposal-field">
         <label for="target_value">Giá trị đích</label>
-        <input id="target_value" name="target_value" value="{{ draft.target_value }}" placeholder="{{ '192.0.2.10' if ipv4_selected else 'docs.example.test' }}" maxlength="253" spellcheck="false" autocapitalize="none" required {{ feedback_attrs('target_value', 'target-hint') }}>
+        <input id="target_value" name="target_value" value="{{ draft.target_value }}" placeholder="{{ '192.0.2.10' if ipv4_selected else 'docs.example.test' }}" maxlength="254" spellcheck="false" autocapitalize="none" required aria-controls="proposal-target-check" {{ feedback_attrs('target_value', 'target-hint') }}>
         {{ field_error('target_value') }}
         <small id="target-hint" class="proposal-hint">{{ ipv4_hint if ipv4_selected else domain_hint }}</small>
       </div>
     </div>
+    <div id="proposal-target-check" class="proposal-target-check" data-url="{{ url_for('check_proposal_target') }}" aria-live="polite" {% if not target_check %}hidden{% endif %}>
+      {% if target_check %}{% include 'proposal_target_check.html' %}{% endif %}
+    </div>
     <div id="description-group" class="proposal-field">
-      <label for="description">Mô tả quy tắc</label>
+      <label for="description">{{ 'Mô tả mới' if draft.change_action == 'UPDATE' else 'Mô tả quy tắc' }}</label>
       <textarea id="description" name="description" rows="3" maxlength="4000" {% if draft.change_action != 'REMOVE' %}required{% endif %} {{ feedback_attrs('description') }}>
 {{ draft.description }}</textarea>
       {{ field_error('description') }}
@@ -78,7 +169,7 @@
 {{ draft.reason }}</textarea>
       {{ field_error('reason') }}
     </div>
-    <div class="proposal-field">
+    <div id="proposal-conflict-group" class="proposal-field" {% if target_check and (not target_check.conflict or target_check.error) %}hidden{% endif %}>
       <label class="check">
         <input type="checkbox" id="conflict_ack" name="conflict_ack" value="yes" {% if draft.conflict_ack == 'yes' %}checked{% endif %} {{ feedback_attrs('conflict_ack') }}>
         Tôi đã xem xét cảnh báo Blacklist ưu tiên chặn khi có quy tắc đối lập.
@@ -93,7 +184,84 @@
 {% if g.user.role_code=='ADMIN' and r.request_status in ['APPROVED','APPLY_FAILED'] %}<section class="panel narrow"><h2>{{ 'Thử lại áp dụng' if r.request_status=='APPLY_FAILED' else 'Áp dụng thay đổi' }} · BM-03</h2><p>Xác minh dữ liệu trước/sau trong một giao dịch MySQL. Không thay đổi mạng thật.</p><form method="post" action="{{ url_for('apply',rid=r.request_id) }}">{{ csrf() }}<label class="check"><input type="checkbox" name="simulate_failure" value="yes"> Tạo lỗi mô phỏng có chủ đích để kiểm thử luồng thất bại</label><button>Xác nhận {{ 'thử lại' if r.request_status=='APPLY_FAILED' else 'áp dụng' }}</button></form></section>{% endif %}
 <section class="panel"><h2>Các lần áp dụng</h2><div class="tablewrap"><table><thead><tr><th>Lần</th><th>Người thực hiện</th><th>Chế độ</th><th>Kết quả</th><th>Chi tiết</th></tr></thead><tbody>{% for x in deployments %}<tr><td>{{ x.attempt_no }}</td><td>{{ x.actor_name }}<small>{{ x.started_at }}</small></td><td>{{ x.execution_mode }}</td><td>{{ state(x.result) }}</td><td>{{ x.result_detail or '—' }}{% if x.before_snapshot or x.after_snapshot %}<details><summary>Trước / sau</summary><pre>{{ x.before_snapshot or '—' }}\n{{ x.after_snapshot or '—' }}</pre></details>{% endif %}</td></tr>{% else %}<tr><td colspan="5" class="empty">Chưa áp dụng.</td></tr>{% endfor %}</tbody></table></div></section><section class="panel"><h2>Lịch sử xử lý</h2>{% for x in history %}<div class="timeline"><b>{{ x.action_code }}</b><small>{{ x.occurred_at }} · {{ x.actor_role_code or 'SYSTEM' }} · ID {{ x.actor_user_id or '—' }} · {{ x.outcome }}</small><p>{{ x.detail or '' }}</p>{% if x.old_data or x.new_data %}<details><summary>Dữ liệu trước / sau</summary><pre>{{ x.old_data or '—' }}\n{{ x.new_data or '—' }}</pre></details>{% endif %}</div>{% else %}<p>Chưa có nhật ký.</p>{% endfor %}</section>
 {% elif view=='policy' %}<section class="panel narrow"><h2>Đối chiếu danh sách hiệu lực</h2><p>Kiểm tra khớp chính xác IP/tên miền. Không phân giải DNS hoặc phát sinh kết nối mạng. Có thể cung cấp thêm IPv4 đích giả định cho tên miền.</p><form method="post">{{ csrf() }}<label>Loại đối tượng<select name="target_type"><option>DOMAIN</option><option>IPV4</option></select></label><label>Giá trị<input name="target_value" required maxlength="253" placeholder="docs.example.test"></label><label>IPv4 đích bổ sung (tùy chọn)<input name="destination_ip" placeholder="192.0.2.10"></label><button>Kiểm chứng</button></form>{% if result %}<div class="verdict {{ result.verdict|lower }}"><b>{{ result.verdict }}</b><p>{{ result.target }} — {{ result.why }}</p>{% for x in result.matched %}<small>{{ x.list_type }} · {{ x.target_value }}</small>{% endfor %}</div>{% endif %}</section>
-{% elif view=='users' %}<section class="panel"><h2>Tạo tài khoản</h2><form method="post">{{ csrf() }}<div class="formgrid"><label>Username<input name="username" required maxlength="64"></label><label>Họ tên<input name="full_name" required maxlength="150"></label><label>Vai trò<select name="role_id">{{ roles() }}</select></label><label>Mật khẩu (ít nhất 12 ký tự)<input type="password" name="password" required minlength="12" maxlength="128" autocomplete="new-password"></label></div><button>Tạo tài khoản</button></form></section><section class="panel"><h2>Tài khoản hiện có</h2>{% for x in items %}<form class="userrow" method="post" action="{{ url_for('user_edit',uid=x.user_id) }}">{{ csrf() }}<div><b>{{ x.username }}</b><small>ID {{ x.user_id }}</small></div><label>Họ tên<input name="full_name" value="{{ x.full_name }}" maxlength="150" required></label><label>Vai trò<select name="role_id">{{ roles(x.role_id) }}</select></label><label>Trạng thái<select name="account_status">{% for v in ['ACTIVE','LOCKED'] %}<option {% if x.account_status==v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label><button class="secondary">Lưu</button></form>{% endfor %}</section>
+{% elif view=='users' %}
+<section class="panel">
+  <h2>Tạo tài khoản</h2>
+  <form method="post" data-password-confirmation="password">
+    {{ csrf() }}
+    <div class="formgrid">
+      <label>Tên đăng nhập<input name="username" value="{{ draft.username|default('') }}" required maxlength="64"></label>
+      <label>Họ tên<input name="full_name" value="{{ draft.full_name|default('') }}" required maxlength="150"></label>
+      <label class="create-user-role">Vai trò
+        <select name="role_id">
+          {% for id, label in assignable_roles.items() %}<option value="{{ id }}" {% if id==draft.role_id %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      {{ password_field('create-password', 'password', 'Mật khẩu', 'new-password', minlength=min_length, maxlength=max_length,
+                        hint='Dùng ' ~ min_length ~ '–' ~ max_length ~ ' ký tự.', error=errors.get('password')) }}
+      {{ password_field('create-confirm-password', 'confirm_password', 'Nhập lại mật khẩu', 'new-password',
+                        minlength=min_length, maxlength=max_length, error=errors.get('confirm_password'), toggle_label='mật khẩu nhập lại') }}
+    </div>
+    <button type="submit">Tạo tài khoản</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Tài khoản hiện có</h2>
+  {% for x in items %}
+  <form class="userrow" method="post" action="{{ url_for('user_edit', uid=x.user_id) }}">
+    {{ csrf() }}
+    <div><b>{{ x.username }}</b><small>ID {{ x.user_id }}</small></div>
+    <label>Họ tên<input name="full_name" value="{{ x.full_name }}" maxlength="150" required></label>
+    <div class="userrow-role">
+      <span>Vai trò</span>
+      <strong>{{ assignable_roles.get(x.role_id, x.role_code|title) }}</strong>
+      {% if x.role_id in assignable_roles %}
+      <a href="{{ url_for('user_role', uid=x.user_id) }}" aria-label="Đổi vai trò của {{ x.username }}">Đổi vai trò</a>
+      {% endif %}
+    </div>
+    <label>Trạng thái
+      <select name="account_status">
+        <option value="ACTIVE" {% if x.account_status=='ACTIVE' %}selected{% endif %}>Hoạt động</option>
+        <option value="LOCKED" {% if x.account_status=='LOCKED' %}selected{% endif %}>Đã khóa</option>
+      </select>
+    </label>
+    <button type="submit" class="secondary">Lưu</button>
+  </form>
+  {% endfor %}
+</section>
+{% elif view=='user_role' %}
+<section class="panel narrow account-panel">
+  <dl class="details">
+    <dt>Tài khoản</dt><dd><strong>{{ target.username }}</strong> · {{ target.full_name }}</dd>
+    <dt>Vai trò hiện tại</dt><dd>{{ assignable_roles[target.role_id] }}</dd>
+    {% if not stale %}<dt>Vai trò mới</dt><dd><strong>{{ assignable_roles[next_role_id] }}</strong></dd>{% endif %}
+  </dl>
+  {% if stale %}
+    <div class="flash error" role="alert">Vai trò đã thay đổi kể từ khi mở biểu mẫu. Hãy kiểm tra vai trò hiện tại rồi mở lại biểu mẫu.</div>
+    <div class="actions">
+      <a class="button" href="{{ url_for('user_role', uid=target.user_id) }}">Mở lại biểu mẫu</a>
+      <a href="{{ url_for('users') }}">Về danh sách</a>
+    </div>
+  {% else %}
+    <form method="post" action="{{ url_for('user_role', uid=target.user_id) }}">
+      {{ csrf() }}
+      <input type="hidden" name="expected_role_id" value="{{ target.role_id }}">
+      <input type="hidden" name="role_revision" value="{{ role_revision }}">
+      <input type="hidden" name="role_id" value="{{ next_role_id }}">
+      <label for="role-reason">Lý do đổi vai trò
+        <textarea id="role-reason" name="reason" rows="4" maxlength="4000" required
+                  {% if reason_error %}aria-invalid="true" autofocus{% endif %}
+                  aria-describedby="{{ 'role-reason-error ' if reason_error else '' }}role-reason-hint"></textarea>
+        {% if reason_error %}<small class="role-reason-error" id="role-reason-error">{{ reason_error }}</small>{% endif %}
+        <small id="role-reason-hint">Lý do được lưu trong nhật ký kiểm toán.</small>
+      </label>
+      <div class="actions">
+        <button type="submit">Xác nhận đổi vai trò</button>
+        <a href="{{ url_for('users') }}">Hủy</a>
+      </div>
+    </form>
+  {% endif %}
+</section>
 {% elif view=='audit' %}<section class="panel"><form class="filters" method="get"><label>Hành động hoặc username<input name="q" value="{{ q }}"></label><button>Tìm kiếm</button></form><div class="tablewrap"><table><thead><tr><th>Thời điểm</th><th>Người thực hiện</th><th>Hành động</th><th>Kết quả</th><th>Chi tiết</th></tr></thead><tbody>{% for x in items %}<tr><td>{{ x.occurred_at }}</td><td>{{ x.username or 'SYSTEM' }}<small>{{ x.actor_role_code or '—' }}</small></td><td>{{ x.action_code }}<small>{{ x.entity_type }} #{{ x.entity_id or '—' }}</small></td><td>{{ x.outcome }}</td><td>{{ x.detail or '—' }}{% if x.old_data or x.new_data %}<details><summary>Trước / sau</summary><pre>{{ x.old_data or '—' }}\n{{ x.new_data or '—' }}</pre></details>{% endif %}</td></tr>{% else %}<tr><td colspan="5" class="empty">Chưa có nhật ký phù hợp.</td></tr>{% endfor %}</tbody></table></div></section>
 {% elif view=='error' %}<section class="panel narrow"><h2>Không thể hoàn thành thao tác</h2><p>{{ message }}</p><a class="button" href="{{ url_for('home') if g.user else url_for('login') }}">Quay về</a></section>{% endif %}
 <footer>NetAccess Manager · Nhóm 13 · Phiên bản Lab 0.1</footer></main>{% if g.user %}</div>{% endif %}<script src="{{ url_for('static',filename='app.js') }}"></script></body></html>

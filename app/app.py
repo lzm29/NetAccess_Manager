@@ -14,6 +14,14 @@ app.config.update(SECRET_KEY=os.environ['SECRET_KEY'], SESSION_COOKIE_HTTPONLY=T
                   SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=False,
                   PERMANENT_SESSION_LIFETIME=timedelta(hours=2), MAX_CONTENT_LENGTH=128*1024)
 
+PASSWORD_MIN_LENGTH = 12
+PASSWORD_MAX_LENGTH = 128
+CURRENT_PASSWORD_MAX_LENGTH = 256
+WEB_ASSIGNABLE_ROLES = {1: 'Requester – IT', 2: 'Approver – ATTT'}
+ROLE_CHANGE_ACTION = 'ACCOUNT_ROLE_CHANGED'
+PROPOSAL_LIST_TYPES = ('WHITELIST', 'BLACKLIST')
+PROPOSAL_ACTIONS = ('ADD', 'UPDATE', 'REMOVE')
+PROPOSAL_TARGET_TYPES = ('IPV4', 'DOMAIN')
 
 def db():
     if 'db' not in g:
@@ -163,7 +171,7 @@ def login():
         name=request.form.get('username','').strip()[:64]; password=request.form.get('password','')
         user=one(USER_SELECT+' WHERE u.username=%s',(name,))
         hashed=one('SELECT password_hash FROM users WHERE user_id=%s',(user['user_id'],)) if user else None
-        valid=bool(user and len(password)<=256 and check_password_hash(hashed['password_hash'],password) and user['account_status']=='ACTIVE')
+        valid=bool(user and len(password)<=CURRENT_PASSWORD_MAX_LENGTH and check_password_hash(hashed['password_hash'],password) and user['account_status']=='ACTIVE')
         if valid:
             session.clear(); session['uid']=user['user_id']; session.permanent=True; session['csrf']=secrets.token_hex(32)
             audit('LOGIN','AUTH',actor=user); return finish('Đăng nhập thành công.','home')
@@ -176,6 +184,46 @@ def login():
 @require()
 def logout():
     audit('LOGOUT','AUTH'); db().commit(); session.clear(); return redirect(url_for('login'))
+
+
+@app.get('/account')
+@require()
+def account():
+    return page('Thông tin tài khoản', 'account')
+
+
+@app.route('/account/password', methods=['GET', 'POST'])
+@require()
+def change_password():
+    errors = {}
+    if request.method == 'POST':
+        current = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirmation = request.form.get('confirm_password', '')
+        if not current:
+            errors['current_password'] = 'Nhập mật khẩu hiện tại.'
+        if not PASSWORD_MIN_LENGTH <= len(new_password) <= PASSWORD_MAX_LENGTH:
+            errors['new_password'] = f'Mật khẩu mới phải dài {PASSWORD_MIN_LENGTH}–{PASSWORD_MAX_LENGTH} ký tự.'
+        if not confirmation:
+            errors['confirm_password'] = 'Nhập lại mật khẩu mới.'
+        elif confirmation != new_password:
+            errors['confirm_password'] = 'Mật khẩu nhập lại chưa khớp.'
+
+        if not errors:
+            user_id = g.user['user_id']
+            credentials = one('SELECT password_hash FROM users WHERE user_id=%s', (user_id,))
+            if len(current) <= CURRENT_PASSWORD_MAX_LENGTH and check_password_hash(credentials['password_hash'], current):
+                write('UPDATE users SET password_hash=%s WHERE user_id=%s',
+                      (generate_password_hash(new_password), user_id))
+                audit('PASSWORD_CHANGED', 'USER', user_id)
+                return finish('Đã đổi mật khẩu. Dùng mật khẩu mới ở lần đăng nhập tiếp theo.', 'account')
+            errors['current_password'] = 'Mật khẩu hiện tại chưa đúng.'
+            audit('PASSWORD_CHANGE_FAILED', 'USER', user_id, outcome='FAILED')
+            db().commit()
+
+    return page('Đổi mật khẩu', 'change_password', errors=errors,
+                min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH,
+                current_max_length=CURRENT_PASSWORD_MAX_LENGTH), 400 if errors else 200
 
 
 @app.get('/')
@@ -203,11 +251,79 @@ def entries():
 @app.get('/requests')
 @require()
 def requests_list():
-    q=request.args.get('q','')[:253]; status=request.args.get('status',''); conditions=['(c.request_code LIKE %s OR c.target_value LIKE %s)']; args=['%'+q+'%']*2
+    q=request.args.get('q','')[:254]; status=request.args.get('status','')
+    kind = request.args.get('target_type')
+    exact_target = None
+    if kind in PROPOSAL_TARGET_TYPES:
+        try:
+            exact_target = normalize_target(kind, q)
+        except ValueError:
+            pass
+    if exact_target:
+        q = exact_target
+        conditions = ['c.target_type=%s', 'c.target_value=%s']
+        args = [kind, q]
+    else:
+        conditions = ['(c.request_code LIKE %s OR c.target_value LIKE %s)']
+        args = ['%'+q+'%']*2
     if g.user['role_code']=='REQUESTER': conditions.append('c.requested_by=%s'); args.append(g.user['user_id'])
     if status in ('PENDING','APPROVED','REJECTED','APPLYING','APPLIED','APPLY_FAILED','INVALIDATED'): conditions.append('c.request_status=%s'); args.append(status)
     result=rows(REQ_SELECT+' WHERE '+' AND '.join(conditions)+' ORDER BY c.created_at DESC LIMIT 200',args)
     return page('Đề xuất và lịch sử','requests',items=result,q=q,status=status)
+
+
+def proposal_target_value(kind, raw_value):
+    if not raw_value.strip():
+        raise ValueError('Hãy nhập giá trị đích.')
+    try:
+        return normalize_target(kind, raw_value)
+    except ValueError:
+        message = ('Hãy nhập một địa chỉ IPv4 hợp lệ, ví dụ 192.0.2.10.' if kind == 'IPV4'
+                   else 'Hãy nhập tên miền như docs.example.test, bỏ https://, đường dẫn và ký tự đại diện.')
+        raise ValueError(message) from None
+
+
+def proposal_target_check(kind, val, list_type, action):
+    current = entry(kind, val, list_type)
+    conflict = opposite(kind, val, list_type)
+    open_request = one('SELECT 1 FROM change_requests WHERE target_type=%s AND target_value=%s AND open_slot=1',
+                       (kind, val))
+    list_name = 'Whitelist' if list_type == 'WHITELIST' else 'Blacklist'
+    error = None
+    if open_request:
+        error = 'Đích này đang có đề xuất chưa kết thúc. Hãy đợi đề xuất đó được xử lý xong.'
+    elif action == 'ADD' and current:
+        error = f'Đích này đã có quy tắc đang hiệu lực trong {list_name}. Bạn có thể chọn Cập nhật mô tả hoặc Loại bỏ.'
+    elif action != 'ADD' and not current:
+        error = f'Cập nhật mô tả và Loại bỏ yêu cầu quy tắc đang hiệu lực trong {list_name}.'
+    return dict(kind=kind, value=val, list_type=list_type, current=current, conflict=conflict, error=error)
+
+
+def load_proposal_target_history(check):
+    check['history'] = rows('''SELECT request_id, request_code, list_type, change_action, request_status, created_at
+                               FROM change_requests WHERE target_type=%s AND target_value=%s AND requested_by=%s
+                               ORDER BY created_at DESC, request_id DESC LIMIT 5''',
+                            (check['kind'], check['value'], g.user['user_id']))
+
+
+@app.get('/requests/target-check')
+@require('REQUESTER')
+def check_proposal_target():
+    kind = request.args.get('target_type', '')
+    list_type = request.args.get('list_type', '')
+    action = request.args.get('change_action', '')
+    check = None
+    error = None
+    try:
+        if kind not in PROPOSAL_TARGET_TYPES or list_type not in PROPOSAL_LIST_TYPES or action not in PROPOSAL_ACTIONS:
+            raise ValueError('Hãy chọn danh sách, hành động và loại đối tượng.')
+        value = proposal_target_value(kind, request.args.get('target_value', ''))
+    except ValueError as exc:
+        error = str(exc)
+    else:
+        check = proposal_target_check(kind, value, list_type, action)
+        load_proposal_target_history(check)
+    return render_template('proposal_target_check.html', target_check=check, lookup_error=error), 200, {'Cache-Control': 'no-store'}
 
 
 @app.route('/requests/new',methods=['GET','POST'])
@@ -216,30 +332,30 @@ def new_request():
     draft = dict(list_type='WHITELIST', change_action='ADD', target_type='DOMAIN',
                  target_value='', description='', reason='', conflict_ack='')
     errors = {}
+    target_check = None
     if request.method == 'POST':
         draft = {name: request.form.get(name, '') for name in draft}
         kind, lt, action = draft['target_type'], draft['list_type'], draft['change_action']
         for name, options, message in (
-            ('list_type', ('WHITELIST', 'BLACKLIST'), 'Hãy chọn Whitelist hoặc Blacklist.'),
-            ('change_action', ('ADD', 'UPDATE', 'REMOVE'), 'Hãy chọn hành động cần thực hiện.'),
-            ('target_type', ('IPV4', 'DOMAIN'), 'Hãy chọn tên miền hoặc địa chỉ IPv4.'),
+            ('list_type', PROPOSAL_LIST_TYPES, 'Hãy chọn Whitelist hoặc Blacklist.'),
+            ('change_action', PROPOSAL_ACTIONS, 'Hãy chọn hành động cần thực hiện.'),
+            ('target_type', PROPOSAL_TARGET_TYPES, 'Hãy chọn tên miền hoặc địa chỉ IPv4.'),
         ):
             if draft[name] not in options:
                 errors[name] = message
 
-        val = draft['target_value'].strip()
-        if not val:
-            errors['target_value'] = 'Hãy nhập giá trị đích.'
-        elif len(val) > 253:
-            errors['target_value'] = 'Giá trị đích chỉ được dài tối đa 253 ký tự.'
-        elif 'target_type' not in errors:
+        if 'target_type' not in errors:
             try:
-                val = normalize_target(kind, val)
-            except ValueError:
-                errors['target_value'] = (
-                    'Hãy nhập một địa chỉ IPv4 hợp lệ, ví dụ 192.0.2.10.' if kind == 'IPV4'
-                    else 'Hãy nhập tên miền như docs.example.test, bỏ https://, đường dẫn và ký tự đại diện.'
-                )
+                val = proposal_target_value(kind, draft['target_value'])
+            except ValueError as exc:
+                errors['target_value'] = str(exc)
+
+        if not errors:
+            target_check = proposal_target_check(kind, val, lt, action)
+            if target_check['error']:
+                errors['target_value'] = target_check['error']
+            elif target_check['conflict'] and draft['conflict_ack'] != 'yes':
+                errors['conflict_ack'] = 'Hãy xác nhận đã xem cảnh báo về quy tắc ở danh sách đối lập.'
 
         reason = draft['reason'].strip()
         if not reason:
@@ -256,27 +372,21 @@ def new_request():
                 errors['description'] = 'Mô tả chỉ được dài tối đa 4.000 ký tự.'
 
         if not errors:
-            current = entry(kind, val, lt)
-            conflict = opposite(kind, val, lt)
-            if action == 'ADD' and current:
-                errors['target_value'] = 'Đích này đã có quy tắc đang hiệu lực trong danh sách bạn chọn. Hãy kiểm tra lại đích hoặc hành động.'
-            elif action != 'ADD' and not current:
-                errors['target_value'] = 'Không tìm thấy quy tắc đang hiệu lực để sửa hoặc gỡ. Hãy kiểm tra lại danh sách và giá trị đích.'
-            elif one("SELECT request_id FROM change_requests WHERE target_type=%s AND target_value=%s AND open_slot=1", (kind, val)):
-                errors['target_value'] = 'Đích này đang có đề xuất xử lý. Hãy đợi đề xuất đó kết thúc rồi gửi lại.'
-            elif conflict and draft['conflict_ack'] != 'yes':
-                errors['conflict_ack'] = 'Đích này có quy tắc ở danh sách đối lập. Blacklist được ưu tiên chặn. Hãy đánh dấu xác nhận nếu vẫn muốn gửi.'
-            else:
-                rid = write('''INSERT INTO change_requests(request_code,requested_by,list_type,target_type,target_value,change_action,target_entry_id,target_version,before_snapshot,conflict_snapshot,proposed_description,reason)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                    ('REQ-' + secrets.token_hex(8).upper(), g.user['user_id'], lt, kind, val, action,
-                     current['entry_id'] if current else None, current['version_no'] if current else None,
-                     dump(current), dump(conflict), desc, reason))
-                audit('REQUEST_CREATED', 'REQUEST', rid, rid,
-                      new={'status': 'PENDING', 'target': val, 'action': action, 'list_type': lt, 'description': desc, 'reason': reason})
-                return finish('Đã gửi đề xuất. Danh sách chưa thay đổi.', 'request_detail', rid=rid)
+            current = target_check['current']
+            conflict = target_check['conflict']
+            rid = write('''INSERT INTO change_requests(request_code,requested_by,list_type,target_type,target_value,change_action,target_entry_id,target_version,before_snapshot,conflict_snapshot,proposed_description,reason)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                ('REQ-' + secrets.token_hex(8).upper(), g.user['user_id'], lt, kind, val, action,
+                 current['entry_id'] if current else None, current['version_no'] if current else None,
+                 dump(current), dump(conflict), desc, reason))
+            audit('REQUEST_CREATED', 'REQUEST', rid, rid,
+                  new={'status': 'PENDING', 'target': val, 'action': action, 'list_type': lt, 'description': desc, 'reason': reason})
+            return finish('Đã gửi đề xuất. Danh sách chưa thay đổi.', 'request_detail', rid=rid)
 
-    return page('Tạo đề xuất thay đổi', 'new', draft=draft, errors=errors), 400 if errors else 200
+        if target_check:
+            load_proposal_target_history(target_check)
+    return page('Tạo đề xuất thay đổi', 'new', draft=draft, errors=errors,
+                target_check=target_check), 400 if errors else 200
 
 
 @app.get('/requests/<int:rid>')
@@ -366,13 +476,47 @@ def audit_view():
 @app.route('/users',methods=['GET','POST'])
 @require('ADMIN')
 def users():
-    if request.method=='POST':
-        name=textfield('username',64); full=textfield('full_name',150); role=choice('role_id',('1','2','3')); password=request.form.get('password','')
-        if not 12<=len(password)<=128: raise ValueError('Mật khẩu phải có 12–128 ký tự.')
-        if one('SELECT user_id FROM users WHERE username=%s',(name,)): raise ValueError('Tên đăng nhập đã tồn tại.')
-        uid=write('INSERT INTO users(username,full_name,role_id,password_hash) VALUES(%s,%s,%s,%s)',(name,full,role,generate_password_hash(password)))
-        audit('ACCOUNT_CREATED','USER',uid,new={'username':name,'full_name':full,'role_id':role}); return finish('Đã tạo tài khoản.','users')
-    return page('Tài khoản và phân quyền','users',items=rows(USER_SELECT+' ORDER BY user_id'))
+    draft = {}
+    errors = {}
+    if request.method == 'POST':
+        role = web_assignable_role()
+        name = textfield('username', 64)
+        full = textfield('full_name', 150)
+        password = request.form.get('password', '')
+        confirmation = request.form.get('confirm_password', '')
+        draft = dict(username=name, full_name=full, role_id=role)
+
+        if not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+            errors['password'] = f'Mật khẩu phải có {PASSWORD_MIN_LENGTH}–{PASSWORD_MAX_LENGTH} ký tự.'
+        if not confirmation:
+            errors['confirm_password'] = 'Nhập lại mật khẩu.'
+        elif confirmation != password:
+            errors['confirm_password'] = 'Mật khẩu nhập lại chưa khớp.'
+
+        if not errors:
+            if one('SELECT user_id FROM users WHERE username=%s', (name,)):
+                raise ValueError('Tên đăng nhập đã tồn tại.')
+            uid = write('INSERT INTO users(username,full_name,role_id,password_hash) VALUES(%s,%s,%s,%s)',
+                        (name, full, role, generate_password_hash(password)))
+            audit('ACCOUNT_CREATED', 'USER', uid, new=draft)
+            return finish('Đã tạo tài khoản.', 'users')
+
+    return page('Tài khoản và phân quyền', 'users', items=rows(USER_SELECT+' ORDER BY user_id'),
+                assignable_roles=WEB_ASSIGNABLE_ROLES, draft=draft, errors=errors,
+                min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH), 400 if errors else 200
+
+
+def deny_user_role_change(message, uid=None):
+    if request.method == 'POST':
+        audit('ACCESS_DENIED', 'USER', uid, outcome='DENIED', detail=message)
+        db().commit()
+    abort(403, message)
+
+
+def web_assignable_role(uid=None):
+    if request.form.get('role_id') == '3':
+        deny_user_role_change('Chỉ có thể cấp vai trò Requester hoặc Approver trên web.', uid)
+    return int(choice('role_id', tuple(map(str, WEB_ASSIGNABLE_ROLES))))
 
 
 @app.post('/users/<int:uid>/edit')
@@ -380,10 +524,49 @@ def users():
 def user_edit(uid):
     old=one(USER_SELECT+' WHERE u.user_id=%s',(uid,))
     if not old: abort(404)
-    role=int(choice('role_id',('1','2','3'))); status=choice('account_status',('ACTIVE','LOCKED')); full=textfield('full_name',150)
-    if uid==g.user['user_id'] and (role!=old['role_id'] or status!='ACTIVE'): raise ValueError('Không được tự đổi vai trò hoặc khóa tài khoản của mình.')
-    write('UPDATE users SET full_name=%s,role_id=%s,account_status=%s WHERE user_id=%s',(full,role,status,uid))
+    if request.form.get('role_id', str(old['role_id'])) != str(old['role_id']):
+        deny_user_role_change('Dùng chức năng Đổi vai trò để cập nhật vai trò của tài khoản.', uid)
+    status=choice('account_status',('ACTIVE','LOCKED')); full=textfield('full_name',150)
+    if uid==g.user['user_id'] and status!='ACTIVE': raise ValueError('Không được tự khóa tài khoản của mình.')
+    write('UPDATE users SET full_name=%s,account_status=%s WHERE user_id=%s',(full,status,uid))
     new=one(USER_SELECT+' WHERE u.user_id=%s',(uid,)); audit('ACCOUNT_UPDATED','USER',uid,old=old,new=new); return finish('Đã cập nhật tài khoản.','users')
+
+
+@app.route('/users/<int:uid>/role', methods=['GET', 'POST'])
+@require('ADMIN')
+def user_role(uid):
+    target = one(USER_SELECT + ' WHERE u.user_id=%s', (uid,))
+    if not target:
+        abort(404)
+    current_role_id = target['role_id']
+    if uid == g.user['user_id'] or current_role_id not in WEB_ASSIGNABLE_ROLES:
+        deny_user_role_change('Chỉ có thể đổi vai trò giữa Requester và Approver cho tài khoản khác.', uid)
+    next_role_id = next(role_id for role_id in WEB_ASSIGNABLE_ROLES if role_id != current_role_id)
+    revision = one("""SELECT COALESCE(MAX(audit_id), 0) AS revision FROM audit_logs
+                      WHERE entity_type='USER' AND entity_id=%s AND action_code=%s AND outcome='SUCCESS'""",
+                   (uid, ROLE_CHANGE_ACTION))['revision']
+    form = dict(target=target, assignable_roles=WEB_ASSIGNABLE_ROLES, next_role_id=next_role_id,
+                role_revision=revision)
+    if request.method == 'GET':
+        return page('Đổi vai trò', 'user_role', **form)
+
+    requested_role_id = web_assignable_role(uid)
+    if (request.form.get('expected_role_id') != str(current_role_id)
+            or request.form.get('role_revision') != str(revision)):
+        return page('Đổi vai trò', 'user_role', stale=True, **form), 409
+    if requested_role_id != next_role_id:
+        abort(400, 'Vai trò mới phải khác vai trò hiện tại.')
+
+    reason = request.form.get('reason', '').strip()
+    if not 1 <= len(reason) <= 4000:
+        return page('Đổi vai trò', 'user_role', reason_error='Nhập lý do từ 1 đến 4.000 ký tự.', **form), 400
+
+    write('UPDATE users SET role_id=%s WHERE user_id=%s', (next_role_id, uid))
+    updated = one(USER_SELECT + ' WHERE u.user_id=%s', (uid,))
+    audit(ROLE_CHANGE_ACTION, 'USER', uid,
+          old={'role_id': current_role_id, 'role_code': target['role_code']},
+          new={'role_id': next_role_id, 'role_code': updated['role_code']}, detail=reason)
+    return finish('Đã đổi vai trò. Quyền mới có hiệu lực ở lần truy cập tiếp theo.', 'users')
 
 
 @app.errorhandler(ValueError)
@@ -417,7 +600,7 @@ def seed_demo():
         raise click.ClickException('Database đã có tài khoản. Không ghi đè.')
     for username,role,full in [('requester',1,'Nhân viên IT'),('approver',2,'Cán bộ ATTT'),('admin',3,'Quản trị viên mạng')]:
         password=click.prompt(f'Mật khẩu {username} (12–128 ký tự)',hide_input=True,confirmation_prompt=True)
-        if not 12<=len(password)<=128: raise click.ClickException('Mật khẩu phải dài 12–128 ký tự. Không có tài khoản nào được lưu.')
+        if not PASSWORD_MIN_LENGTH<=len(password)<=PASSWORD_MAX_LENGTH: raise click.ClickException('Mật khẩu phải dài 12–128 ký tự. Không có tài khoản nào được lưu.')
         uid=write('INSERT INTO users(username,role_id,full_name,password_hash) VALUES(%s,%s,%s,%s)',(username,role,full,generate_password_hash(password)))
         audit('BOOTSTRAP_ACCOUNT','USER',uid,new={'username':username,'role_id':role},detail='Khởi tạo Lab qua CLI')
     db().commit(); click.echo('Đã tạo requester, approver, admin.')

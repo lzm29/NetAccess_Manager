@@ -1,0 +1,47 @@
+{% from 'status.html' import state %}
+{% if lookup_error %}
+<div data-target-result data-blocked>
+  <p class="proposal-error">{{ lookup_error }}</p>
+</div>
+{% elif target_check %}
+<div data-target-result {% if target_check.error %}data-blocked{% endif %} {% if target_check.conflict %}data-conflict{% endif %}>
+  <h3>Kiểm tra đích <strong>{{ target_check.value }}</strong></h3>
+  {% if target_check.error and not (errors is defined and errors.get('target_value') == target_check.error) %}
+  <p class="proposal-error">{{ target_check.error }}</p>
+  {% endif %}
+  <dl class="proposal-check-rules">
+    {% for value, label in [('WHITELIST', 'Whitelist'), ('BLACKLIST', 'Blacklist')] %}
+    {% set rule = target_check.current if value == target_check.list_type else target_check.conflict %}
+    <dt>{{ label }}</dt>
+    <dd>
+      {% if rule %}
+      {{ state('ACTIVE') }} <span>{{ rule.description }}</span>
+      {% else %}Chưa có quy tắc hiệu lực{% endif %}
+    </dd>
+    {% endfor %}
+  </dl>
+  {% if target_check.conflict %}
+  <p class="proposal-check-warning">Đích đang có quy tắc trong danh sách đối lập. Blacklist được ưu tiên khi đối chiếu truy cập.</p>
+  {% endif %}
+  <h4>Lịch sử đề xuất của bạn</h4>
+  {% if target_check.history %}
+  <ul class="proposal-check-history">
+    {% for item in target_check.history %}
+    <li>
+      <div>
+        <a href="{{ url_for('request_detail', rid=item.request_id) }}">{{ item.request_code }}</a>
+        <small>{{ {'ADD':'Thêm mới','UPDATE':'Cập nhật mô tả','REMOVE':'Loại bỏ'}[item.change_action] }} · {{ item.list_type|title }} · {{ item.created_at.strftime('%d/%m/%Y %H:%M') }}</small>
+      </div>
+      {{ state(item.request_status) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if not target_check.error and target_check.history[0].request_status == 'REJECTED' %}
+  <p>Bạn có thể xem phản hồi của đề xuất bị từ chối để bổ sung căn cứ cho đề xuất mới.</p>
+  {% endif %}
+  <a href="{{ url_for('requests_list', q=target_check.value, target_type=target_check.kind) }}">Xem lịch sử của đích</a>
+  {% else %}
+  <p>Bạn chưa gửi đề xuất cho đích này.</p>
+  {% endif %}
+</div>
+{% endif %}
