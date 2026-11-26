@@ -7,7 +7,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 from flask import Flask, g, session, request, render_template, redirect, url_for, flash, abort, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from domain import normalize_target, dump, snapshot, parse_json, decision
+from domain import normalize_target, dump, snapshot, parse_json, decision, like_pattern
 
 app = Flask(__name__)
 app.config.update(SECRET_KEY=os.environ['SECRET_KEY'], SESSION_COOKIE_HTTPONLY=True,
@@ -240,8 +240,8 @@ def home():
 @app.get('/entries')
 @require()
 def entries():
-    q=request.args.get('q','')[:253]; lt=request.args.get('list_type',''); status=request.args.get('status','ACTIVE')
-    conditions=['target_value LIKE %s']; args=['%'+q+'%']
+    q=request.args.get('q','').strip()[:253]; lt=request.args.get('list_type',''); status=request.args.get('status','ACTIVE')
+    conditions=['target_value LIKE %s']; args=[like_pattern(q, str.lower)]
     if lt in ('WHITELIST','BLACKLIST'): conditions.append('list_type=%s'); args.append(lt)
     if status in ('ACTIVE','INACTIVE'): conditions.append('entry_status=%s'); args.append(status)
     result=rows(ENTRY_SELECT+' WHERE '+' AND '.join(conditions)+' ORDER BY entry_id DESC LIMIT 200',args)
@@ -251,7 +251,7 @@ def entries():
 @app.get('/requests')
 @require()
 def requests_list():
-    q=request.args.get('q','')[:254]; status=request.args.get('status','')
+    q=request.args.get('q','').strip()[:254]; lt=request.args.get('list_type',''); status=request.args.get('status','')
     kind = request.args.get('target_type')
     exact_target = None
     if kind in PROPOSAL_TARGET_TYPES:
@@ -265,11 +265,12 @@ def requests_list():
         args = [kind, q]
     else:
         conditions = ['(c.request_code LIKE %s OR c.target_value LIKE %s)']
-        args = ['%'+q+'%']*2
+        args = [like_pattern(q, str.upper), like_pattern(q, str.lower)]
     if g.user['role_code']=='REQUESTER': conditions.append('c.requested_by=%s'); args.append(g.user['user_id'])
+    if lt in PROPOSAL_LIST_TYPES: conditions.append('c.list_type=%s'); args.append(lt)
     if status in ('PENDING','APPROVED','REJECTED','APPLYING','APPLIED','APPLY_FAILED','INVALIDATED'): conditions.append('c.request_status=%s'); args.append(status)
     result=rows(REQ_SELECT+' WHERE '+' AND '.join(conditions)+' ORDER BY c.created_at DESC LIMIT 200',args)
-    return page('Đề xuất và lịch sử','requests',items=result,q=q,status=status)
+    return page('Đề xuất và lịch sử','requests',items=result,q=q,lt=lt,status=status)
 
 
 def proposal_target_value(kind, raw_value):
@@ -350,7 +351,7 @@ def new_request():
             except ValueError as exc:
                 errors['target_value'] = str(exc)
 
-        if not errors:
+        if not any(k in errors for k in ('list_type', 'change_action', 'target_type', 'target_value')):
             target_check = proposal_target_check(kind, val, lt, action)
             if target_check['error']:
                 errors['target_value'] = target_check['error']
