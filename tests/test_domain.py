@@ -7,9 +7,10 @@ from datetime import datetime
 class DomainTests(unittest.TestCase):
     def test_normalization(self):
         self.assertEqual(normalize_target('DOMAIN',' Docs.Example.TEST. '),'docs.example.test')
-        self.assertEqual(normalize_target('IPV4','192.0.2.10'),'192.0.2.10')
+        self.assertEqual(normalize_target('IPV4',' 192.0.2.10 '),'192.0.2.10')
+        self.assertEqual(normalize_target('DOMAIN','Api-01.SecOps.Test'),'api-01.secops.test')
     def test_invalid(self):
-        for kind, val in [('DOMAIN','https://example.test'),('DOMAIN','*.example.test'),('DOMAIN','example..test'),('DOMAIN','-bad.test'),('DOMAIN','192.0.2.10'),('DOMAIN','tên.test'),('IPV4','192.0.2.0/24'),('IPV4','256.0.0.1'),('IPV4','::1')]:
+        for kind, val in [('DOMAIN','https://example.test'),('DOMAIN','*.example.test'),('DOMAIN','example..test'),('DOMAIN','-bad.test'),('DOMAIN','192.0.2.10'),('DOMAIN','tên.test'),('DOMAIN','localhost'),('IPV4','192.0.2.0/24'),('IPV4','256.0.0.1'),('IPV4','::1'),('NET','192.0.2.1')]:
             with self.subTest(kind=kind,val=val), self.assertRaises(ValueError): normalize_target(kind,val)
     def test_priority(self):
         w={'list_type':'WHITELIST'}; b={'list_type':'BLACKLIST'}
@@ -17,9 +18,11 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(decision([w])[0],'ALLOW')
         self.assertEqual(decision([b])[0],'BLOCK')
         self.assertEqual(decision([w,b])[0],'BLOCK')
+        self.assertEqual(decision([w,b])[1],'Khớp Blacklist; ưu tiên chặn.')
     def test_snapshot(self):
         obj={'created_at':datetime(2026,11,25,12,0),'version_no':1}
         self.assertEqual(snapshot(obj),parse_json(dump(obj)))
+        self.assertEqual(dump({'b':1,'a':2}),'{"a": 2, "b": 1}')
         self.assertIsNone(snapshot(None))
     def test_like_pattern(self):
         self.assertEqual(like_pattern('  Docs.Example  ', str.lower), '%docs.example%')
