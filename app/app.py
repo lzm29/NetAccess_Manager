@@ -17,6 +17,7 @@ app.config.update(SECRET_KEY=os.environ['SECRET_KEY'], SESSION_COOKIE_HTTPONLY=T
 PASSWORD_MIN_LENGTH = 12
 PASSWORD_MAX_LENGTH = 128
 CURRENT_PASSWORD_MAX_LENGTH = 256
+DUMMY_HASH = generate_password_hash('netaccess-constant-time-dummy-password')
 WEB_ASSIGNABLE_ROLES = {1: 'Requester – IT', 2: 'Approver – ATTT'}
 ROLE_CHANGE_ACTION = 'ACCOUNT_ROLE_CHANGED'
 PROPOSAL_LIST_TYPES = ('WHITELIST', 'BLACKLIST')
@@ -87,7 +88,8 @@ def prepare():
         token=session.get('csrf','')
         if not token or not secrets.compare_digest(token,request.form.get('csrf','')):
             abort(400,'Phiên biểu mẫu không hợp lệ. Tải lại trang.')
-        lock_writes()
+        if request.endpoint not in ('login', 'logout', 'policy'):
+            lock_writes()
     g.user = None
     if session.get('uid'):
         g.user=one(USER_SELECT+' WHERE u.user_id=%s',(session['uid'],))
@@ -102,8 +104,8 @@ def require(*roles):
         def wrapped(*a,**kw):
             if not g.user: return redirect(url_for('login'))
             if roles and g.user['role_code'] not in roles:
-                if request.method=='POST':
-                    audit('ACCESS_DENIED','AUTH',outcome='DENIED',detail=request.endpoint); db().commit()
+                audit('ACCESS_DENIED','AUTH',outcome='DENIED',detail=f'{request.method} {request.path}')
+                db().commit()
                 abort(403)
             return fn(*a,**kw)
         return wrapped
@@ -171,7 +173,8 @@ def login():
         name=request.form.get('username','').strip()[:64]; password=request.form.get('password','')
         user=one(USER_SELECT+' WHERE u.username=%s',(name,))
         hashed=one('SELECT password_hash FROM users WHERE user_id=%s',(user['user_id'],)) if user else None
-        valid=bool(user and len(password)<=CURRENT_PASSWORD_MAX_LENGTH and check_password_hash(hashed['password_hash'],password) and user['account_status']=='ACTIVE')
+        pw_ok=len(password)<=CURRENT_PASSWORD_MAX_LENGTH and check_password_hash(hashed['password_hash'] if hashed else DUMMY_HASH,password)
+        valid=bool(user and pw_ok and user['account_status']=='ACTIVE')
         if valid:
             session.clear(); session['uid']=user['user_id']; session.permanent=True; session['csrf']=secrets.token_hex(32)
             audit('LOGIN','AUTH',actor=user); return finish('Đăng nhập thành công.','home')
@@ -456,13 +459,14 @@ def policy():
     result=None
     if request.method=='POST':
         kind=choice('target_type',('IPV4','DOMAIN')); val=normalize_target(kind,textfield('target_value',253)); extra=textfield('destination_ip',required=False)
-        conditions=['(target_type=%s AND target_value=%s)']; args=[kind,val]
+        conditions=['(target_type=%s AND target_value=%s)']; args=[kind,val]; norm_ip=None
         if extra:
             if kind!='DOMAIN': raise ValueError('IP bổ sung chỉ dùng khi kiểm tra tên miền.')
-            conditions.append("(target_type='IPV4' AND target_value=%s)"); args.append(normalize_target('IPV4',extra))
+            norm_ip=normalize_target('IPV4',extra)
+            conditions.append("(target_type='IPV4' AND target_value=%s)"); args.append(norm_ip)
         matched=rows(ENTRY_SELECT+" WHERE entry_status='ACTIVE' AND ("+' OR '.join(conditions)+')',args)
         verdict,why=decision(matched); result={'verdict':verdict,'why':why,'matched':matched,'target':val}
-        audit('POLICY_CHECK','POLICY_CHECK',new={'target':val,'ip':extra or None,'verdict':verdict},detail=why); db().commit()
+        audit('POLICY_CHECK','POLICY_CHECK',new={'target':val,'ip':norm_ip,'verdict':verdict},detail=why); db().commit()
     return page('Kiểm chứng Allow / Block','policy',result=result)
 
 
